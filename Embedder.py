@@ -1150,8 +1150,11 @@ class VariationalAutoencoderEmbedding(Embedding):
 
         if len(self.Y) == 0:
             self.Y = None
+            self.optimizer.learning_rate.assign(1e-3)
         else:
             self.Y = np.array(self.Y, dtype=np.float64)
+            if self.optimizer.learning_rate.numpy() != 1e-4:
+                self.optimizer.learning_rate.assign(1e-4)
 
         self.X = self.data[cp_indices]
 
