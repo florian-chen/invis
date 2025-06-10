@@ -9,11 +9,15 @@ InVis is a tool designed for interactive data visualization. It features advance
 To handle the datasets included in this project, Git Large File Storage (Git LFS) is required. Install Git LFS by following the instructions on the [Git LFS website](https://git-lfs.github.com/).  
 If you don't wish to install Git LFS, you can also download the datasets manually, or use your own datasets. 
 
-### Clone the Repository
-Clone the InVis GitHub repository:
+### Clone the Repository and Initialize Submodules
+Clone the InVis GitHub repository and initialize the required submodules:
 
 ```bash
 git clone https://github.com/faguodev/invis.git
+cd invis
+
+git submodule init
+git submodule update
 ```
 
 ### Setting Up the Environment
@@ -26,6 +30,15 @@ InVis relies on a Conda environment for managing its dependencies. To set up the
 conda env create -f environment.yml
 ```
 
+4. Activate the environment and install our fork of the openTSNE package needed to run the interactive t-SNE algorithm:
+
+```bash
+conda activate invis2
+cd external/openTSNE
+pip install .
+cd ../..
+```
+
 #### Windows
 
 If you're using windows, we recommend using [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) to set up the environment as above. 
@@ -36,10 +49,14 @@ To install InVis on Windows natively, please use the `windows_environment.yml` f
 conda env create -f windows_environment.yml
 ```
 
-After setting up the environment, additionally install [Tensorflow](https://www.tensorflow.org/install):
+After setting up the environment, additionally install [Tensorflow](https://www.tensorflow.org/install), and our forked openTSNE version:
 
 ```bash
 conda activate invis2
+pip install tensorflow
+cd external/openTSNE
+pip install .
+cd ../..
 pip install tensorflow
 ```
 

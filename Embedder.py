@@ -33,6 +33,7 @@ import cpca.kernel_gen as kernel_gen
 import cpca.utils as utils
 from cpca.nystroem import Nystroem, KernelKMeansSQ
 from sklearn.metrics.pairwise import rbf_kernel, linear_kernel, polynomial_kernel
+from openTSNE import TSNEEmbedding, affinity, initialization
 
 import tensorflow as tf
 from tensorflow.keras.layers import Dense, Layer
@@ -1180,3 +1181,254 @@ class VariationalAutoencoderEmbedding(Embedding):
         embedding = np.vstack((x_embedding, y_embedding))
 
         return embedding
+    
+
+
+class openItSNEEmbedding(Embedding):
+    def __init__(
+        self,
+        data,
+        points,
+        verbose,
+        parent
+    ):
+        """
+        Initialize the t-SNE embedding.
+        """
+        patience: int = 10
+
+        self.data = data
+        self.n = self.data.shape[0]
+        self.parent = parent
+
+        self.perplexity = 50
+        self.cp_exaggeration_approach = "secondary_perplexity"
+        self.learning_rate = "auto"
+        self.n_iter = 500
+        self.n_jobs = 4
+        
+        try:
+            self.w = PopupSlider(self.parent, 'Enter desired frame-rate (default is 30):', default=30, minimum=1, maximum=100)
+            self.w.exec_()
+            num = int(self.w.slider_value)
+            if num == '':
+                num = 30
+            self.frame_rate = num
+        except Exception as e:
+            msg = "It seems like something went wrong in the parameter selection"
+            print(e)
+            QMessageBox.about(parent, "Embedding error", msg) 
+
+        try:
+            m, ok = QInputDialog.getText(parent, 'Metric', 'Enter desired exaggeration factor control-point attractive forces:')
+            num = float(m)
+            self.cp_exaggeration = num
+        except Exception as e:
+            msg = "It seems like something went wrong in the parameter selection"
+            print(e)
+            QMessageBox.about(parent, "Embedding error", msg) 
+
+        try:
+            m, ok = QInputDialog.getText(parent, 'Metric', 'Enter desired  control-point perplexity:')
+            num = float(m)
+            self.secondary_perplexity = num
+        except Exception as e:
+            msg = "It seems like something went wrong in the parameter selection"
+            print(e)
+            QMessageBox.about(parent, "Embedding error", msg) 
+
+        print(self.cp_exaggeration)
+        print(self.secondary_perplexity)
+
+        self.verbose = verbose
+        self.patience = patience
+
+        self.control_points_set = False
+
+        # Create early stopping callback
+        self.early_stopping = EarlyStoppingCallback(
+            patience=self.patience, verbose=self.verbose
+        )
+
+        self.affinities = affinity.PerplexityBasedNN(
+            self.data,
+            perplexity=self.perplexity,
+            metric="euclidean",
+            n_jobs=self.n_jobs,
+            random_state=42,
+            verbose=self.verbose,
+            method="annoy",
+        )
+
+        self.P = self.affinities.P.copy()
+        self.initialization = initialization.pca(self.data, random_state=42)
+
+        self.embedding = TSNEEmbedding(
+            self.initialization,
+            self.affinities,
+            negative_gradient_method="fft",
+            learning_rate=self.learning_rate,
+            n_jobs=self.n_jobs,
+            verbose=self.verbose,
+        )
+
+        # Initialize placeholders for control points
+        self.control_points = np.ndarray(shape=(0, 2), dtype=np.float32)
+        self.control_point_indices = []
+
+        self.parent.update_status_bar("Calculating initial t-SNE Embedding.")
+
+        self._run_gradient_descent()
+
+        if len(points.items()) > 0:
+            self.control_points_set = True
+            self.update_control_points(points)
+
+        # control points
+        self.cp_selector_m_by_n = None
+        self.old_control_point_indices = []
+
+        # Algorithm details
+        self.name = "Interactive t-SNE"
+        self.is_dynamic = True 
+
+        self.parent.update_status_bar("Iterative t-SNE Embedding.")
+
+
+
+    def _run_gradient_descent(self):
+        """
+        Run the gradient descent optimization to compute the embedding.
+        """
+        if self.verbose:
+            print("Running gradient descent.")
+
+        _, self.completed_iterations = self.embedding.optimize(
+            n_iter=self.n_iter,
+            inplace=True,
+            cp_indices=self.control_point_indices,
+            control_points=self.control_points,
+            verbose=self.verbose,
+            frame_rate=self.frame_rate,
+            callbacks=self.early_stopping,
+            callbacks_every_iters=2,  # This may not be 1, as, since we don't explicitly compute a control point loss, the first iteration will have much lower loss than the second and subsequent iterations.
+        )
+
+    def update_control_points(self, points) -> None:
+        """
+        Update the control points.
+        """
+        tmp_points = []
+        indices = []
+        for i, coords in points.items():
+            indices.append(i)
+            tmp_points.append(coords)
+
+        if set(indices) != set(self.control_point_indices):
+            self.control_points_set = True
+            self.control_point_indices = indices
+
+            P_cp = self.P.copy()
+
+            # Exaggerate the control point affinities
+            if self.cp_exaggeration_approach == "secondary_perplexity":
+                control_point_data = self.data[indices]
+
+                cp_affinities = self.affinities.to_new_filtered(
+                    control_point_data,
+                    perplexity=self.secondary_perplexity,
+                    return_distances=False,
+                    normalization="none",
+                )
+
+                cp_affinities /= self.affinities.normalization_constant
+                cp_affinities *= self.cp_exaggeration
+
+                for i, cp_idx in enumerate(indices):
+                    P_cp[:, cp_idx] = cp_affinities[i, :].T
+
+            else:
+                P_cp[:, self.control_point_indices] *= self.cp_exaggeration
+
+            self.embedding.affinities = affinity.PrecomputedAffinities(P_cp, False)
+
+            return
+
+        self.control_points = np.array(tmp_points)
+
+        # Restart the gradient descent with updated control points
+        if self.control_points_set:
+            self._run_gradient_descent()  # Run gradient descent with the new control points
+
+    def get_embedding(self) -> np.ndarray:
+        """
+        Retrieve the computed t-SNE embedding.
+
+        Returns:
+            np.ndarray: The embedded data.
+        """
+        # print(f"Completed iterations: {self.completed_iterations}")
+        return self.embedding.T
+
+    def get_iteration_count(self) -> int:
+        """
+        Get the number of iterations performed by the t-SNE algorithm.
+
+        Returns:
+            int: Number of iterations completed.
+        """
+        return self.completed_iterations
+
+
+class EarlyStoppingCallback:
+    """Callback for early stopping when KL divergence doesn't improve for a specified number of iterations."""
+
+    def __init__(self, patience=10, min_delta=1e-4, verbose=False):
+        """
+        Initialize early stopping callback.
+
+        Args:
+            patience (int): Number of iterations without improvement before stopping
+            min_delta (float): Minimum change in KL divergence to qualify as improvement
+            verbose (bool): Whether to print early stopping messages
+        """
+        self.patience = patience
+        self.min_delta = min_delta
+        self.verbose = verbose
+        self.best_error = float("inf")
+        self.wait = 0
+        self.stopped_iteration = 0
+
+    def optimization_about_to_start(self):
+        """Called at the beginning of optimization to reset state."""
+        self.best_error = float("inf")
+        self.wait = 0
+
+    def __call__(self, iteration, error, embedding):
+        """
+        Check if optimization should stop due to lack of improvement.
+
+        Args:
+            iteration (int): Current iteration number
+            error (float): Current KL divergence
+            embedding (TSNEEmbedding): Current embedding
+
+        Returns:
+            bool: True if optimization should stop, False otherwise
+        """
+        if error < self.best_error - self.min_delta:
+            # Error improved
+            self.best_error = error
+            self.wait = 0
+        else:
+            # Error didn't improve
+            self.wait += 1
+            if self.wait >= self.patience:
+                self.stopped_iteration = iteration
+                if self.verbose:
+                    print(
+                        f"Early stopping at iteration {iteration}, best error: {self.best_error:.6f}"
+                    )
+                return True
+
+        return False
