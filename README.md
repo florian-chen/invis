@@ -40,7 +40,7 @@ After setting up the environment, additionally install [Tensorflow](https://www.
 
 ```bash
 conda activate invis2
-pip install tensorflow
+pip install tensorflow==2.17.0
 ```
 
 ### GPU Support
